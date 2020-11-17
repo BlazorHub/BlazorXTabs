@@ -1,4 +1,5 @@
-﻿<CascadingValue Value="this">
+﻿@using Configuration
+<CascadingValue Value="this">
     @ChildContent
 </CascadingValue>
 
@@ -14,73 +15,80 @@
                             <span aria-hidden="true">×</span>
                         </button>
                     }
-                    <a class='xtabs-link nav-link @(IsActive(tab) ? "active" : "")' @onclick="() => SetActive(tab)">
-                        <h6 class="m-0 font-weight-bold text-primary">@tab.Title</h6>
-                    </a>
-                </li>
+                        <a class='xtabs-link nav-link @(IsActive(tab) ? "active" : "")' @onclick="() => { if (!IsTabHeaderDisabled) { SetActive(tab);} }">
+                            <h6 class="m-0 font-weight-bold text-primary">@tab.Title</h6>
+                        </a>
+                </li>            
             }
         </ul>
     </div>
     @{
-    <div class="xtabs-tab-content tab-content">
-        @if (FullTabRender)
-        {
-            @foreach (var tab in TabContent)
-            {
-            <div class='xtabs-content card-body tab-pane fade @(IsActive(tab) ? "show active" : "")'>
-                @tab.ChildContent
-            </div>
-            }
-        }
-        else
-        {
-            @foreach (var tab in TabContent)
-            {
-                @if (IsActive(tab))
-                {
-                    <div class="xtabs-content card-body tab-pane fade show active" >
-                        @tab.ChildContent
-                    </div> 
-                }
-                else if (tab.InactiveRender)
-                {
-                    <div class="xtabs-content card-body tab-pane fade" >
-                        @tab.ChildContent
-                    </div>
-                }
-            }
-        }
+    <div class="xtabs-content tab-content">
+                    @if (RenderMode == RenderMode.Full)
+                    {
+                        @foreach (var tab in TabContent)
+                        {
+                        <div class='xtabs-tab-content card-body tab-pane fade @tab.CssClass @(IsActive(tab) ? "show active" : "")'>
+                            @tab.ChildContent
+                        </div>
+                        } 
+                    }
+                    else
+                    {
+                        @foreach (var tab in TabContent)
+                        {
+                            @if (IsActive(tab))
+                            {
+                                <div class="xtabs-tab-content card-body tab-pane fade @tab.CssClass show active">
+                                    @tab.ChildContent
+                                </div> }
+                            else if (tab.InactiveRender)
+                            {
+                                <div class="xtabs-tab-content card-body tab-pane fade @tab.CssClass">
+                                    @tab.ChildContent
+                                </div>
+                            }
+                        }
+                    }
 
-    </div> }
+                    @if (RenderMode == RenderMode.Steps)
+                    {
+                        <div class="d-flex justify-content-center">
+                            <button type="button" class="btn btn-info" disabled="@IsPreviousDisabled" @onclick="PreviousTab">Previous</button>
+                            <button type="button" class="btn btn-success" disabled="@(IsNextDisabled)" @onclick="NextTab">Next</button>
+                        </div>            
+                    }
+    </div> 
+    }
 </div>
 
 
-@code { /// <summary>
-    /// Fully renders every tab and hides them avoiding re-rendering and loss of state
-    /// </summary>
-    [Parameter]
-    public bool FullTabRender { get; set; }
+@code {[Parameter] public RenderMode RenderMode { get; set; } = RenderMode.Partial;
+
 
     /// <summary>
     /// Can close tabs
     /// </summary>
-    [Parameter]
-    public bool CloseTabs { get; set; }
+    [Parameter] public bool CloseTabs { get; set; }
 
     /// <summary>
     /// When a new tab is added, sets it to active
     /// </summary>
-    [Parameter]
-    public bool NewTabSetActive { get; set; }
+    [Parameter] public bool NewTabSetActive { get; set; }
 
-    [Parameter]
-    public RenderFragment ChildContent { get; set; }
+    [Parameter] public RenderFragment ChildContent { get; set; }
 
-    [Parameter]
-    public string CssClass { get; set; }
+    [Parameter] public string CssClass { get; set; }
+
+    [Parameter] public EventCallback<XTab> OnTabAdded { get; set; }
+    [Parameter] public EventCallback<XTab> OnActiveTabChanged { get; set; }
+    [Parameter] public EventCallback<XTab> OnTabRemoved { get; set; }
+
 
     [Inject]
     public NavigationManager NavigationManager { get; set; }
+
+
 
     private List<XTab> TabContent = new List<XTab>();
     private XTab Active { get; set; }
@@ -88,13 +96,15 @@
     internal void AddPage(XTab tab)
     {
         ///TODO: Using Titles for now. Probably should use an ID.
-        if (TabContent.FirstOrDefault(x => x.Title == tab.Title) is XTab existingTab)
+        if (RenderMode == RenderMode.Full && TabContent.FirstOrDefault(x => x.Title == tab.Title) is XTab existingTab)
             SetActive(existingTab);
         else
         {
             TabContent.Add(tab);
             if (TabContent.Count == 1 || NewTabSetActive)
                 SetActive(tab);
+            if (OnTabAdded.HasDelegate)
+                OnTabAdded.InvokeAsync(tab);
         }
         StateHasChanged();
     }
@@ -109,6 +119,8 @@
     private void SetActive(XTab tab)
     {
         Active = tab;
+        if (OnActiveTabChanged.HasDelegate)
+            OnActiveTabChanged.InvokeAsync(tab);
     }
 
     private bool IsActive(XTab tab)
@@ -129,6 +141,8 @@
             }
 
         TabContent.Remove(tab);
+        if (OnTabRemoved.HasDelegate)
+            OnTabRemoved.InvokeAsync();
 
         SetActive(nextSelected);
 
@@ -136,4 +150,28 @@
             NavigationManager.NavigateTo("");
 
         StateHasChanged();
-    } }
+    }
+
+    #region Steps
+
+    private bool IsTabHeaderDisabled => RenderMode == RenderMode.Steps;
+    private bool IsPreviousDisabled => (TabContent?.Count > 0 && TabContent.IndexOf(Active) == 0);
+
+    private bool IsNextDisabled => (TabContent?.Count > 0 && TabContent.IndexOf(Active) == TabContent.IndexOf(TabContent.Last()));
+
+    private void NextTab()
+    {
+        var next = TabContent.IndexOf(Active) + 1;
+        SetActive(TabContent[next]);
+    }
+
+    private void PreviousTab()
+    {
+        var previous = TabContent.IndexOf(Active) - 1;
+        SetActive(TabContent[previous]);
+    }
+
+    #endregion
+
+
+}
